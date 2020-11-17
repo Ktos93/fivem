@@ -25,6 +25,8 @@
 
 #include <Hooking.h>
 
+// REDM1S: doesn't draw sync node data, crashes on tree selection (probably logger stuff missmatch)
+
 inline size_t GET_NIDX(rage::netSyncTree* tree, void* node)
 {
 	return *((uint8_t*)node + 66);
@@ -86,6 +88,7 @@ namespace rage
 
 		virtual bool IsParentNode() = 0;
 
+#ifdef GTA_FIVE
 		virtual void m_18() = 0;
 		virtual void m_20() = 0;
 		virtual void m_28() = 0;
@@ -114,6 +117,45 @@ namespace rage
 		virtual void m_D8() = 0;
 		virtual void m_E0() = 0;
 		virtual void LogObject(rage::netObject* object, rage::netLogStub* stub) = 0;
+#elif IS_RDR3
+		virtual void m_18() = 0; // InitialiseNode
+		virtual void m_20() = 0; // ShutdownNode
+		virtual void m_28() = 0;
+		virtual void m_30() = 0;
+		virtual void m_added1311() = 0;
+		virtual void m_38() = 0;
+		virtual void m_something() = 0; // calls calculatesize, added in a patch
+		virtual void m_40() = 0;
+		virtual void m_48() = 0;
+		virtual void m_50() = 0;
+		virtual void m_58() = 0;
+		virtual uint8_t GetUpdateFrequency(UpdateLevel level) = 0;
+		virtual void m_68() = 0;
+		virtual void m_70() = 0;
+		virtual void m_78() = 0;
+		virtual void m_80() = 0;
+		virtual void m_88() = 0;
+		virtual void m_90() = 0;
+		virtual void m_98() = 0;
+		virtual void m_A0() = 0;
+		virtual void m_unk1() = 0;
+		virtual void m_unk2() = 0;
+		virtual void m_unk3() = 0;
+		virtual void m_unk4() = 0;
+		virtual void m_unk5() = 0;
+		virtual void m_unk6() = 0;
+		virtual void m_unk7() = 0;
+		virtual void m_unk8() = 0;
+		virtual void m_B0() = 0;
+		virtual void WriteObject(rage::netObject* object, rage::datBitBuffer* buffer, rage::netLogStub* logger, bool readFromObject) = 0;
+		virtual void m_D8() = 0;
+		virtual void m_E832() = 0;
+		virtual void LogNode(rage::netLogStub* stub) = 0;
+		virtual void GetUsesCurrentStateBuffer() = 0;
+		virtual void m_E328() = 0;
+		virtual void m_E321() = 0;
+		virtual void LogObject(rage::netObject* object, rage::netLogStub* stub) = 0;
+#endif
 
 		// data node
 
@@ -136,8 +178,12 @@ namespace rage
 	public:
 		uint32_t flags;
 		uint32_t pad3;
+
+#ifdef GTA_FIVE
 		uint64_t pad4;
-		netSyncDataNodeBase* externalDependentNodeRoot; //0x50
+#endif
+
+		netSyncDataNodeBase* externalDependentNodeRoot; // 0x50
 		uint32_t externalDependencyCount;
 		netSyncDataNodeBase* externalDependencies[8];
 		uint8_t syncFrequencies[8];
@@ -148,10 +194,23 @@ namespace rage
 rage::netObject* g_curNetObjectSelection;
 static rage::netSyncNodeBase* g_curSyncNodeSelection;
 
+static std::string GetClassTypeName(void* ptr)
+{
+	std::string name;
+
+#ifdef GTA_FIVE
+	name = typeid(*ptr).name();
+	name = name.substr(6);
+#elif IS_RDR3
+	name = fmt::sprintf("%016llx", *(uint64_t*)ptr);
+#endif
+
+	return name;
+}
+
 static void RenderSyncNode(rage::netObject* object, rage::netSyncNodeBase* node)
 {
-	std::string objectName = typeid(*node).name();
-	objectName = objectName.substr(6);
+	std::string objectName = GetClassTypeName(node);
 
 	if (node->IsParentNode())
 	{
@@ -181,7 +240,7 @@ static void RenderSyncNode(rage::netObject* object, rage::netSyncNodeBase* node)
 
 static void RenderSyncTree(rage::netObject* object, rage::netSyncTree* syncTree)
 {
-	RenderSyncNode(object, *(rage::netSyncNodeBase**)((char*)syncTree + 16));
+	RenderSyncNode(object, syncTree->syncNode);
 }
 
 static void RenderNetObjectTree()
@@ -203,8 +262,7 @@ static void RenderNetObjectTree()
 				{
 					try
 					{
-						std::string objectName = typeid(*object).name();
-						objectName = objectName.substr(6);
+						std::string objectName = GetNetObjEntityName(object->objectType);
 
 						if (ImGui::TreeNodeEx(object,
 							ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick | ((g_curNetObjectSelection == object) ? ImGuiTreeNodeFlags_Selected : 0),
@@ -328,7 +386,7 @@ static void TraverseSyncNode(TSyncLog& retval, TSyncLog* old, int oldId, rage::n
 static TSyncLog TraverseSyncTree(TSyncLog* old, int oldId, rage::netSyncTree* syncTree, rage::netObject* object = nullptr)
 {
 	TSyncLog retval;
-	TraverseSyncNode(retval, old, oldId, *(rage::netSyncNodeBase**)((char*)syncTree + 16), object);
+	TraverseSyncNode(retval, old, oldId, syncTree->syncNode, object);
 
 	return retval;
 }
@@ -365,7 +423,7 @@ struct NetObjectNodeData
 	{
 		std::array<uint8_t, 1024> dummyData;
 		memset(dummyData.data(), 0, dummyData.size());
-		
+
 		lastData = { dummyData, 0 };
 		currentData = { dummyData, 0 };
 
@@ -407,7 +465,7 @@ static bool TraverseTreeInternal(rage::netSyncNodeBase* node, T& state, const st
 template<typename T>
 static void TraverseTree(rage::netSyncTree* tree, T& state, const std::function<bool(T&, rage::netSyncNodeBase*, const std::function<bool()>&)>& cb)
 {
-	TraverseTreeInternal(*(rage::netSyncNodeBase**)((char*)tree + 16), state, cb);
+	TraverseTreeInternal(tree->syncNode, state, cb);
 }
 
 static void InitTree(rage::netSyncTree* tree)
@@ -506,7 +564,7 @@ bool netSyncTree::WriteTreeCfx(int flags, int objFlags, rage::netObject* object,
 	static auto icgi = Instance<ICoreGameInit>::Get();
 
 	int sizeLength = 13;
-	
+
 	if (icgi->OneSyncBigIdEnabled)
 	{
 		sizeLength = 16;
@@ -601,7 +659,11 @@ bool netSyncTree::WriteTreeCfx(int flags, int objFlags, rage::netObject* object,
 
 					auto dataNode = (rage::netSyncDataNodeBase*)node;
 
+#ifdef GTA_FIVE
 					static_assert(offsetof(rage::netSyncDataNodeBase, externalDependentNodeRoot) == 0x50, "parentData off");
+#elif IS_RDR3
+					static_assert(offsetof(rage::netSyncDataNodeBase, externalDependentNodeRoot) == 0x48, "parentData off");
+#endif
 
 					// if we are a data node, we will have to ensure external-dependent nodes are sent as a bundle at all times
 					// this means:
@@ -833,13 +895,13 @@ struct ClonePacketData
 {
 	uint64_t frameIdx;
 	uint32_t ts;
-	
+
 	std::vector<ClonePacketMsg> messages;
 };
 
 #include <nutsnbolts.h>
 
-static InitFunction initFunctionDrilldown([]() 
+static InitFunction initFunctionDrilldown([]()
 {
 	OnGameFrame.Connect([]()
 	{
@@ -897,7 +959,7 @@ void RenderNetDrilldownWindow()
 			g_recordingDrilldown = true;
 			g_drilldownEnd = GetTickCount64() + 1500;
 		}
-		
+
 		if (g_recordingDrilldown)
 		{
 			ImGui::ButtonEx("Recording", {}, ImGuiButtonFlags_Disabled);
@@ -966,9 +1028,7 @@ static const char* DescribeGameObject(void* object)
 
 	auto vObject = (VirtualBase*)object;
 
-	static std::string objectName;
-	objectName = typeid(*vObject).name();
-	objectName = objectName.substr(6);
+	static std::string objectName = GetClassTypeName(vObject);
 
 	return objectName.c_str();
 }
@@ -980,7 +1040,7 @@ void RenderNetObjectDetail(rage::netObject* netObject)
 	ImGui::Text("Object owner: %d", netObject->syncData.ownerId);
 	ImGui::Text("Is remote: %s", netObject->syncData.isRemote ? "true" : "false");
 	ImGui::Text("Game object: %s", netObject->GetGameObject() ? DescribeGameObject(netObject->GetGameObject()) : "NULL");
-	
+
 	if (ImGui::Button("Force blend"))
 	{
 		auto blender = netObject->GetBlender();
@@ -1008,7 +1068,7 @@ void RenderSyncNodeDetail(rage::netObject* netObject, rage::netSyncNodeBase* nod
 	std::vector<std::string> right = syncLog[netObject->objectId][node];
 
 	auto t = g_netObjectNodeMapping[netObject->objectId][node];
-	
+
 	InitTree(netObject->GetSyncTree());
 	auto& sd = rage::g_syncData[netObject->objectId]->nodes[GET_NIDX(netObject->GetSyncTree(), node)];
 
@@ -1101,7 +1161,7 @@ static InitFunction initFunction([]()
 		{
 			static float treeSize = 400.f;
 			static float detailSize = 600.f;
-			
+
 			Splitter(true, 8.0f, &treeSize, &detailSize, 8.0f, 8.0f);
 
 			if (ImGui::BeginChild("tree", ImVec2(treeSize, -1.0f), true))
@@ -1141,8 +1201,7 @@ static InitFunction initFunction([]()
 #if _DEBUG
 static void DumpSyncNode(rage::netSyncNodeBase* node, std::string indent = "\t", bool last = true)
 {
-	std::string objectName = typeid(*node).name();
-	objectName = objectName.substr(6);
+	std::string objectName = GetClassTypeName(node);
 
 	if (node->IsParentNode())
 	{
@@ -1164,12 +1223,11 @@ static void DumpSyncNode(rage::netSyncNodeBase* node, std::string indent = "\t",
 
 static void DumpSyncTree(rage::netSyncTree* syncTree)
 {
-	std::string objectName = typeid(*syncTree).name();
-	objectName = objectName.substr(6);
+	std::string objectName = GetClassTypeName(syncTree);
 
 	trace("using %s = SyncTree<\n", objectName);
 
-	DumpSyncNode(*(rage::netSyncNodeBase**)((char*)syncTree + 16));
+	DumpSyncNode(syncTree->syncNode);
 
 	trace(">;\n");
 }
@@ -1201,10 +1259,11 @@ static void StorePlayerAppearanceDataNode(rage::netSyncNodeBase* node)
 
 static HookFunction hookFunction([]()
 {
+
 #if _DEBUG
 	static ConsoleCommand dumpSyncTreesCmd("dumpSyncTrees", []()
 	{
-		for (int i = 0; i <= 13; i++)
+		for (int i = 0; i < (int)NetObjEntityType::Max; i++)
 		{
 			auto obj = rage::CreateCloneObject((NetObjEntityType)i, i + 204, 0, 0, 32);
 			auto tree = obj->GetSyncTree();
@@ -1221,6 +1280,7 @@ static HookFunction hookFunction([]()
 	}
 
 	// allow CSyncDataLogger even without label string
+#if GTA_FIVE
 	hook::nop(hook::get_pattern("4D 85 C9 74 44 48 8D 4C", 3), 2);
 	hook::nop(hook::get_pattern("4D 85 C0 74 25 80 3A 00", 3), 2);
 
@@ -1252,6 +1312,33 @@ static HookFunction hookFunction([]()
 	hook::nop(hook::get_pattern("48 85 D2 74 38 F3 41", 3), 2);
 	hook::nop(hook::get_pattern("4D 85 C9 74 46 F3", 3), 2);
 	hook::nop(hook::get_pattern("4D 85 C9 74 11 48 85", 3), 2);
+#elif IS_RDR3
+	// REDM1S: doesn't work it seems, anyway need patterns
+	hook::nop((void*)0x142BD517C, 2);
+	hook::nop((void*)0x142BD5418, 2);
+	hook::nop((void*)0x142BD53F0, 2);
+	hook::nop((void*)0x142BD53C4, 2);
+	hook::nop((void*)0x142BD5398, 2);
+	hook::nop((void*)0x142BD592C, 2);
+	hook::nop((void*)0x142BD5904, 2);
+	hook::nop((void*)0x142BD58D8, 2);
+	hook::nop((void*)0x142BD58AC, 2);
+	hook::nop((void*)0x142BD524F, 2);
+	hook::nop((void*)0x142BD521F, 2);
+	hook::nop((void*)0x142BD51EB, 2);
+	hook::nop((void*)0x142BD51B3, 2);
+	hook::nop((void*)0x142BD551C, 2);
+	hook::nop((void*)0x142BD55A3, 2);
+	hook::nop((void*)0x142BD5770, 2);
+	hook::nop((void*)0x142BD5445, 2);
+	hook::nop((void*)0x142BD5797, 2);
+	hook::nop((void*)0x142BD54A8, 2);
+	hook::nop((void*)0x142BD5954, 2);
+	hook::nop((void*)0x142BD57F0, 2);
+	hook::nop((void*)0x142BD585D, 2);
+	hook::nop((void*)0x142BD5543, 2);
+	hook::nop((void*)0x142BD52D7, 2);
+#endif
 });
 
 
