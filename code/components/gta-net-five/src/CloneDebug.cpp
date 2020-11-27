@@ -1161,11 +1161,8 @@ void RenderSyncNodeDetail(rage::netObject* netObject, rage::netSyncNodeBase* nod
 	node->LogObject(netObject, &logger);
 	StorePlayerAppearanceDataNode(node);
 
-#ifdef GTA_FIVE
-	std::vector<std::string> right = syncLog[netObject->GetObjectId()][node];
-#endif
 
-#ifdef GTA_FIVE
+	std::vector<std::string> right = syncLog[netObject->GetObjectId()][node];
 	auto t = g_netObjectNodeMapping[netObject->GetObjectId()][node];
 
 	InitTree(netObject->GetSyncTree());
@@ -1175,7 +1172,6 @@ void RenderSyncNodeDetail(rage::netObject* netObject, rage::netSyncNodeBase* nod
 	ImGui::Text("Last ack: %d ms ago", rage::netInterface_queryFunctions::GetInstance()->GetTimestamp() - rage::g_syncData[netObject->GetObjectId()].nodes[node].lastAck);
 	ImGui::Text("Last change: %d ms ago", rage::netInterface_queryFunctions::GetInstance()->GetTimestamp() - rage::g_syncData[netObject->GetObjectId()].nodes[node].lastChange);
 	ImGui::Text("Change - Ack: %d ms", rage::g_syncData[netObject->GetObjectId()].nodes[node].lastChange - rage::g_syncData[netObject->GetObjectId()].nodes[node].lastAck);
-#endif
 
 	ImGui::Columns(2);
 	ImGui::Text("Current");
@@ -1183,11 +1179,7 @@ void RenderSyncNodeDetail(rage::netObject* netObject, rage::netSyncNodeBase* nod
 	ImGui::Text("Saved");
 	ImGui::NextColumn();
 
-#ifdef GTA_FIVE
 	auto maxSize = std::max(left.size(), right.size());
-#elif IS_RDR3
-	auto maxSize = left.size();
-#endif
 
 	for (int i = 0; i < maxSize; i++)
 	{
@@ -1202,13 +1194,11 @@ void RenderSyncNodeDetail(rage::netObject* netObject, rage::netSyncNodeBase* nod
 
 		ImGui::NextColumn();
 
-#ifdef GTA_FIVE
 		if (i < right.size())
 		{
 			ImGui::Text("%s", right[i].c_str());
 		}
 		else
-#endif
 		{
 			ImGui::Text("");
 		}
