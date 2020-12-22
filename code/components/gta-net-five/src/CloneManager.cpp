@@ -84,6 +84,8 @@ CNetGamePlayer* GetLocalPlayer();
 
 CNetGamePlayer* GetPlayerByNetId(uint16_t);
 
+static bool g_doShit;
+
 void UpdateTime(uint64_t serverTime, bool isInit = false);
 
 bool IsWaitingForTimeSync();
@@ -267,7 +269,7 @@ private:
 	std::map<std::tuple<int, int>, std::chrono::milliseconds> m_pendingRemoveAcks;
 
 	std::set<int> m_pendingConfirmObjectIds;
-	
+
 	tbb::concurrent_queue<std::string> m_logQueue;
 
 	std::condition_variable m_consoleCondVar;
@@ -1076,7 +1078,7 @@ bool CloneManagerLocal::HandleCloneCreate(const msgClone& msg)
 
 	Log("%s: id %d obj [obj:%d] ts %d\n", __func__, msg.GetClientId(), msg.GetObjectId(), msg.GetTimestamp());
 
-	if (m_pendingRemoveAcks.find({ msg.GetObjectId(), msg.GetUniqifier() }) != m_pendingRemoveAcks.end() || 
+	if (m_pendingRemoveAcks.find({ msg.GetObjectId(), msg.GetUniqifier() }) != m_pendingRemoveAcks.end() ||
 		m_pendingRemoveAcks.find({ msg.GetObjectId(), uint16_t(~msg.GetUniqifier()) }) != m_pendingRemoveAcks.end())
 	{
 		ackPacket();
@@ -1138,6 +1140,17 @@ bool CloneManagerLocal::HandleCloneCreate(const msgClone& msg)
 	auto isRemote = true;
 	auto owner = 31;
 
+#ifdef IS_RDR3
+	auto v18 = (*(__int64(__fastcall**)(void*))(*(uint64_t*)syncTree + 0x68i64))(syncTree);
+	if (v18)
+	{
+		trace("yes v18 = %d\n", (uint64_t)v18);
+
+		auto maybeYes = (*(unsigned __int8(__fastcall**)(void*))(*(uint64_t*)v18 + 0xE8i64))((void*)v18);
+		trace("maybeYes = %d\n", maybeYes);
+	}
+#endif
+
 	// create the object
 	auto obj = rage::CreateCloneObject(msg.GetEntityType(), msg.GetObjectId(), owner, 0, 32);
 
@@ -1162,6 +1175,20 @@ bool CloneManagerLocal::HandleCloneCreate(const msgClone& msg)
 
 	AssociateSyncTree(obj->GetObjectId(), syncTree);
 
+
+#ifdef IS_RDR3
+	auto check = syncTree->m_18(obj, -1);
+	auto check2 = (*(unsigned __int8(__fastcall**)(void*))(*(uint64_t*)obj + 0x98))(obj);
+
+	if (!check && !check2)
+	{
+		trace("Can't apply\n");
+		return false;
+	}
+
+	(*(void(__fastcall**)(void*))(*(uint64_t*)obj + 0x248))(obj);
+#endif
+
 	// apply object creation
 	syncTree->ApplyToObject(obj, nullptr);
 
@@ -1178,6 +1205,7 @@ bool CloneManagerLocal::HandleCloneCreate(const msgClone& msg)
 	// register with object mgr
 	rage::netObjectMgr::GetInstance()->RegisterNetworkObject(obj);
 
+#ifdef GTA_FIVE
 	// initialize blend
 	if (obj->GetBlender())
 	{
@@ -1190,6 +1218,19 @@ bool CloneManagerLocal::HandleCloneCreate(const msgClone& msg)
 	}
 
 	obj->m_1C0();
+#elif IS_RDR3
+	(*(void(__fastcall**)(void*))(*(uint64_t*)obj + 0x250))(obj);
+
+	if ((*(unsigned __int8(__fastcall**)(void*))(*(uint64_t*)obj + 0x280))(obj))
+	{
+		obj->GetBlender()->m_70();
+	}
+
+	obj->GetBlender()->ApplyBlend();
+	obj->GetBlender()->m_38();
+
+	(*(void(__fastcall**)(void*))(*(uint64_t*)obj + 0x240))(obj);
+#endif
 
 	// for the last time, ensure it's not local
 	if (obj->syncData.isRemote != isRemote || obj->syncData.ownerId != owner)
@@ -1257,7 +1298,7 @@ AckResult CloneManagerLocal::HandleCloneUpdate(const msgClone& msg)
 
 		Log("%s: unknown obj?\n", __func__);
 
-		if (m_pendingRemoveAcks.find({ msg.GetObjectId(), msg.GetUniqifier() }) != m_pendingRemoveAcks.end() || 
+		if (m_pendingRemoveAcks.find({ msg.GetObjectId(), msg.GetUniqifier() }) != m_pendingRemoveAcks.end() ||
 			m_pendingRemoveAcks.find({ msg.GetObjectId(), uint16_t(~msg.GetUniqifier()) }) != m_pendingRemoveAcks.end())
 		{
 			// hey, we're deleting this object, you don't know it yet, so you're giving it back to us as 'new'
@@ -1359,11 +1400,17 @@ AckResult CloneManagerLocal::HandleCloneUpdate(const msgClone& msg)
 
 		AssociateSyncTree(obj->GetObjectId(), syncTree);
 
+#ifdef GTA_FIVE
 		// apply to object
 		syncTree->ApplyToObject(obj, nullptr);
 
 		// call post-apply
 		obj->m_1D0();
+#elif IS_RDR3
+		(*(void(__fastcall**)(void*))(*(uint64_t*)obj + 0x248))(obj);
+		syncTree->ApplyToObject(obj, nullptr);
+		(*(void(__fastcall**)(void*))(*(uint64_t*)obj + 0x250))(obj);
+#endif
 	}
 
 	// update client id if changed
@@ -1461,12 +1508,12 @@ void CloneManagerLocal::HandleCloneSync(const char* data, size_t len)
 	bool isMissingFrames = false;
 	uint64_t firstMissingFrame;
 	uint64_t lastMissingFrame;
-	
+
 	if (icgi->NetProtoVersion >= 0x202010191044)
 	{
-		// check for whether we're missing a frame or fragment. 
+		// check for whether we're missing a frame or fragment.
 		FrameIndex newIndex(msg.GetFrameIndex());
-		
+
 		Log("received frame %d:%d\n", newIndex.frameIndex, newIndex.currentFragment);
 
 		// blah
@@ -1555,7 +1602,7 @@ void CloneManagerLocal::HandleCloneSync(const char* data, size_t len)
 				objDesc = fmt::sprintf("obj:%d", m.GetObjectId());
 			}
 
-			list.push_back({ m.GetSyncType() == 1 ? "create" : "sync", fmt::sprintf("%s@%d ts %d sz %db", 
+			list.push_back({ m.GetSyncType() == 1 ? "create" : "sync", fmt::sprintf("%s@%d ts %d sz %db",
 				objDesc,
 				m.GetUniqifier(),
 				int32_t(m.GetTimestamp()) - int32_t(drillTs),
@@ -1593,7 +1640,7 @@ void CloneManagerLocal::HandleCloneSync(const char* data, size_t len)
 					if (icgi->NetProtoVersion >= 0x202010191044)
 					{
 						recreateList.push_back(clone.GetObjectId());
-					} 
+					}
 					else if (icgi->NetProtoVersion >= 0x202007022353)
 					{
 						ignoreList.emplace_back(clone.GetObjectId(), 0);
@@ -1933,7 +1980,48 @@ static HookFunction hookFunctionSceneUpdateWorkaround([]()
 
 void CloneManagerLocal::Update()
 {
+	// REDM1S: comment this for cloning natives
 	WriteUpdates();
+
+	{
+		static bool didShit;
+
+		if (!didShit)
+		{
+			if (Instance<ICoreGameInit>::Get()->HasVariable("networkInited"))
+			{
+				if (g_doShit)
+				{
+					for (int i = 0; i < 1; i++)
+					{
+						TempHackMakePhysicalPlayer(1);
+
+						msgClone msg;
+						msg.m_clientId = 1;
+						msg.m_handle = i + 256;
+						msg.m_entityType = NetObjEntityType::Player;
+						msg.m_syncType = 1;
+						msg.m_timestamp = rage::netInterface_queryFunctions::GetInstance()->GetTimestamp();
+						msg.m_objectId = i + 256;
+
+						FILE* f = fopen("G:/CitizenFX/player_1.bin", "rb");
+						fseek(f, 0, SEEK_END);
+						int len = ftell(f);
+						fseek(f, 0, SEEK_SET);
+
+						msg.m_cloneData.resize(len);
+						fread(msg.m_cloneData.data(), 1, len, f);
+
+						fclose(f);
+
+						HandleCloneCreate(msg);
+					}
+
+					didShit = true;
+				}
+			}
+		}
+	}
 
 	SendUpdates(m_sendBuffer, HashString("netClones"));
 
@@ -2649,5 +2737,11 @@ static InitFunction initFunction([]()
 	OnKillNetworkDone.Connect([]()
 	{
 		TheClones->Reset();
+	});
+
+	static ConsoleCommand cmd("doshit", []()
+	{
+		g_doShit = true;
+		trace("do shit\n");
 	});
 });
