@@ -428,6 +428,10 @@ glm::vec3 GetPlayerFocusPos(const fx::sync::SyncEntityPtr& entity)
 	float playerPos[3];
 	syncTree->GetPosition(playerPos);
 
+	return { playerPos[0], playerPos[1], playerPos[2] };
+
+	// REDM1S: todo
+#if 0
 	auto camData = syncTree->GetPlayerCamera();
 
 	if (!camData)
@@ -445,6 +449,7 @@ glm::vec3 GetPlayerFocusPos(const fx::sync::SyncEntityPtr& entity)
 	case 2:
 		return { playerPos[0] + camData->camOffX, playerPos[1] + camData->camOffY, playerPos[2] + camData->camOffZ };
 	}
+#endif
 }
 
 ServerGameState::ServerGameState()
@@ -731,7 +736,7 @@ void ServerGameState::Tick(fx::ServerInstanceBase* instance)
 
 			glm::vec3 entityPosition(position[0], position[1], position[2]);
 
-			GS_LOG("found relevant entity %d for %d clients with position (%f, %f, %f)\n", entity->handle, entity->relevantTo.count(), entityPosition.x, entityPosition.y, entityPosition.z);
+			GS_LOG("found relevant entity %d:%d for %d clients with position (%f, %f, %f)\n", entity->handle, entity->type, entity->relevantTo.count(), entityPosition.x, entityPosition.y, entityPosition.z);
 
 			sync::CVehicleGameStateNodeData* vehicleData = nullptr;
 
@@ -894,7 +899,8 @@ void ServerGameState::Tick(fx::ServerInstanceBase* instance)
 					entity->type == sync::NetObjEntityType::Plane ||
 					entity->type == sync::NetObjEntityType::Submarine ||
 					entity->type == sync::NetObjEntityType::Trailer ||
-					entity->type == sync::NetObjEntityType::Train)
+					entity->type == sync::NetObjEntityType::Train ||
+					entity->type == sync::NetObjEntityType::DraftVeh)
 				{
 					if (vehicleData)
 					{
@@ -998,8 +1004,10 @@ void ServerGameState::Tick(fx::ServerInstanceBase* instance)
 
 					switch (entity->type)
 					{
+					case sync::NetObjEntityType::Animal:
 					case sync::NetObjEntityType::Ped:
 					case sync::NetObjEntityType::Player:
+					case sync::NetObjEntityType::Horse:
 						objRadius = 2.5f;
 						break;
 					case sync::NetObjEntityType::Heli:
@@ -1059,7 +1067,8 @@ void ServerGameState::Tick(fx::ServerInstanceBase* instance)
 				}
 				else if (entityData.hasCreated || entityData.hasNAckedCreate)
 				{
-					GS_LOG("destroying entity %d:%d for client %d due to scope exit\n", entity->handle, entity->uniqifier, client->GetNetId());
+					GS_LOG("destroying entity %d:%d:%d for client %d due to scope exit\n", entity->handle, entity->uniqifier, entity->type, client->GetNetId());
+					GS_LOG(" - player  (%f, %f, %f) / entity (%f, %f, %f)\n", playerPos.x, playerPos.y, playerPos.z, entityPos.x, entityPos.y, entityPos.z);
 					clientDataUnlocked->entitiesToDestroy[entIdentifier] = { entity, { true, false } };
 				}
 			}
@@ -1599,7 +1608,8 @@ void ServerGameState::Tick(fx::ServerInstanceBase* instance)
 
 							if (syncType == 1)
 							{
-								cmdState.cloneBuffer.Write(4, (uint8_t)entity->type);
+								// REDM1S: this changed to 5 because RDR3 has more entity types
+								cmdState.cloneBuffer.Write(5, (uint8_t)entity->type);
 								cmdState.cloneBuffer.Write(32, entity->creationToken);
 							}
 
@@ -2850,7 +2860,8 @@ bool ServerGameState::ProcessClonePacket(const fx::ClientSharedPtr& client, rl::
 	{
 		creationToken = inPacket.Read<uint32_t>(32);
 
-		objectType = (sync::NetObjEntityType)inPacket.Read<uint8_t>(4);
+		// REDM1S: this changed to 5 because RDR3 has more entity types
+		objectType = (sync::NetObjEntityType)inPacket.Read<uint8_t>(5);
 	}
 
 	auto length = inPacket.Read<uint16_t>(12);
