@@ -1926,9 +1926,15 @@ namespace rage
 
 		virtual void HandleReply(rage::datBitBuffer* buffer, CNetGamePlayer* sourcePlayer) = 0;
 
+#ifdef GTA_FIVE
 		virtual void PrepareExtraData(rage::datBitBuffer* buffer, bool isReply, CNetGamePlayer* player, CNetGamePlayer* unkPlayer) = 0;
 
 		virtual void HandleExtraData(rage::datBitBuffer* buffer, bool isReply, CNetGamePlayer* player, CNetGamePlayer* unkPlayer) = 0;
+#elif IS_RDR3
+		virtual void PrepareExtraData(rage::datBitBuffer* buffer, CNetGamePlayer* player, CNetGamePlayer* unkPlayer) = 0;
+
+		virtual void HandleExtraData(rage::datBitBuffer* buffer, CNetGamePlayer* player, CNetGamePlayer* unkPlayer) = 0;
+#endif
 
 #ifdef GTA_FIVE
 		virtual void m_60() = 0;
@@ -1957,7 +1963,11 @@ namespace rage
 
 		uint8_t pad_0Bh; // +0xB
 
+#ifdef GTA_FIVE
 		char pad_0Ch[24]; // +0xC
+#elif IS_RDR3
+		char pad_0Ch[36]; // +0xC
+#endif
 
 		uint16_t eventId; // +0x24
 
@@ -1967,7 +1977,7 @@ namespace rage
 	public:
 		const char* GetName()
 		{
-			auto findEvent = g_eventNames.find(eventId);
+			auto findEvent = g_eventNames.find(eventType);
 
 			if (findEvent == g_eventNames.end())
 			{
@@ -2112,7 +2122,12 @@ static void SendGameEventRaw(uint16_t eventId, rage::netGameEvent* ev)
 	rage::datBitBuffer rlBuffer(packetStub, sizeof(packetStub));
 
 	ev->Prepare(&rlBuffer, g_player31, nullptr);
+
+#ifdef GTA_FIVE
 	ev->PrepareExtraData(&rlBuffer, false, g_player31, nullptr);
+#elif IS_RDR3
+	ev->PrepareExtraData(&rlBuffer, g_player31, nullptr);
+#endif
 
 	net::Buffer outBuffer;
 
@@ -2301,7 +2316,12 @@ static void HandleNetGameEvent(const char* idata, size_t len)
 			if (ev)
 			{
 				ev->HandleReply(&rlBuffer, player);
+
+#ifdef GTA_FIVE
 				ev->HandleExtraData(&rlBuffer, true, player, g_playerMgr->localPlayer);
+#elif IS_RDR3
+				ev->HandleExtraData(&rlBuffer, player, g_playerMgr->localPlayer);
+#endif
 
 				delete ev;
 				g_events.erase({ eventType, eventHeader });
@@ -2352,7 +2372,11 @@ static void DecideNetGameEvent(rage::netGameEvent* ev, CNetGamePlayer* player, C
 
 	if (ev->Decide(player, unkConn))
 	{
+#ifdef GTA_FIVE
 		ev->HandleExtraData(buffer, false, player, unkConn);
+#elif IS_RDR3
+		ev->HandleExtraData(buffer, player, unkConn);
+#endif
 
 		if (ev->requiresReply)
 		{
@@ -2360,7 +2384,12 @@ static void DecideNetGameEvent(rage::netGameEvent* ev, CNetGamePlayer* player, C
 			rage::datBitBuffer rlBuffer(packetStub, sizeof(packetStub));
 
 			ev->PrepareReply(&rlBuffer, player);
+
+#ifdef GTA_FIVE
 			ev->PrepareExtraData(&rlBuffer, true, player, nullptr);
+#elif IS_RDR3
+			ev->PrepareExtraData(&rlBuffer, player, nullptr);
+#endif
 
 			net::Buffer outBuffer;
 			outBuffer.Write<uint8_t>(1);
