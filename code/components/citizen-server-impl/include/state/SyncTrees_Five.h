@@ -1512,9 +1512,13 @@ struct SyncTree : public SyncTreeBase
 
 	virtual CObjectOrientationNodeData* GetObjectOrientation() override
 	{
+#if 0
 		auto [hasNode, node] = GetData<CObjectOrientationDataNode>();
 
 		return (hasNode) ? &node->data : nullptr;
+#endif
+
+		return nullptr;
 	}
 
 	virtual CVehicleAngVelocityNodeData* GetAngVelocity() override
