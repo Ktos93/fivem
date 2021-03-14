@@ -1975,8 +1975,9 @@ static HookFunction hookFunctionSceneUpdateWorkaround([]()
 
 void CloneManagerLocal::Update()
 {
-	// REDM1S: comment this for cloning natives
+#ifndef ONESYNC_CLONING_NATIVES
 	WriteUpdates();
+#endif
 
 	{
 		static bool didShit;
