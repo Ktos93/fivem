@@ -28,6 +28,8 @@ extern NetLibrary* g_netLibrary;
 
 #include <concurrentqueue.h>
 
+// REDM1S: not reviewed for RDR3, needs to return fwArchetype checks and ifdef some native calls
+
 class FxNativeInvoke
 {
 private:
@@ -182,7 +184,11 @@ std::map<int, uint32_t> g_objectIdToCreationToken;
 
 static hook::cdecl_stub<void*(int handle)> getScriptEntity([]()
 {
+#if GTA_FIVE
 	return hook::pattern("44 8B C1 49 8B 41 08 41 C1 F8 08 41 38 0C 00").count(1).get(0).get<void>(-12);
+#elif IS_RDR3
+	return hook::pattern("45 8B C1 41 C1 F8 08 45 38 0C 00 75 ? 8B 42 ? 41 0F AF C0").count(1).get(0).get<void>(-81);
+#endif
 });
 
 extern int getPlayerId();
@@ -354,9 +360,15 @@ static InitFunction initFunction([]()
 							case RpcConfiguration::ArgumentType::Hash:
 							{
 								uint32_t hash = buf->Read<int>();
+#ifndef IS_RDR3
 								rage::fwModelId idx; // unused
+#endif
 
-								if (native->GetRpcType() == RpcConfiguration::RpcType::EntityCreate || rage::fwArchetypeManager::GetArchetypeFromHashKey(hash, idx))
+								if (native->GetRpcType() == RpcConfiguration::RpcType::EntityCreate
+#ifndef IS_RDR3
+									|| rage::fwArchetypeManager::GetArchetypeFromHashKey(hash, idx)
+#endif
+								)
 								{
 									ntq->Enqueue([=]()
 									{
@@ -538,7 +550,7 @@ static InitFunction initFunction([]()
 
 										if (object)
 										{
-											auto obj = object->objectId;
+											auto obj = object->GetObjectId();
 
 											g_creationTokenToObjectId[creationToken] = (1 << 16) | obj;
 
