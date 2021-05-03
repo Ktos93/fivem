@@ -42,7 +42,7 @@ inline uint32_t MakeEntityHandle(uint16_t objectId)
 
 namespace fx
 {
-	glm::vec3 GetPlayerFocusPos(const fx::sync::SyncEntityPtr& entity);
+eastl::fixed_vector<glm::vec3, 5> GetPlayerFocusPos(const fx::sync::SyncEntityPtr& entity);
 }
 
 static tbb::concurrent_unordered_map<uint32_t, std::list<std::tuple<uint64_t, net::Buffer>>> g_replayList;
@@ -51,17 +51,19 @@ static InitFunction initFunction([]()
 {
 	fx::ServerInstanceBase::OnServerCreate.Connect([](fx::ServerInstanceBase* ref)
 	{
-		auto rpcConfiguration = RpcConfiguration::Load("citizen:/scripting/rpc_natives.json");
-
-		if (!rpcConfiguration)
-		{
-			console::PrintWarning("server", "Could not load rpc_natives.json. Is the server running from the correct directory, and is citizen_dir set?\n");
-			return;
-		}
-
 		auto clientRegistry = ref->GetComponent<fx::ClientRegistry>();
 		auto gameState = ref->GetComponent<fx::ServerGameState>();
 		auto gameServer = ref->GetComponent<fx::GameServer>();
+
+		// REDM1S: implement rpc natives
+		auto rpcFileName = /* (gameServer->GetGameName() == fx::GameName::RDR3) ? "rpc_natives_rdr3.json" : */ "rpc_natives.json";
+		auto rpcConfiguration = RpcConfiguration::Load(fmt::sprintf("citizen:/scripting/%s", rpcFileName));
+
+		if (!rpcConfiguration)
+		{
+			console::PrintWarning("server", "Could not load %s. Is the server running from the correct directory, and is citizen_dir set?\n", rpcFileName);
+			return;
+		}
 
 		clientRegistry->OnClientCreated.Connect([](const fx::ClientSharedPtr& client)
 		{
@@ -124,7 +126,7 @@ static InitFunction initFunction([]()
 		for (auto& native : rpcConfiguration->GetNatives())
 		{
 			// deprecated by ServerSetters
-			if (native->GetName() == "CREATE_PED" || native->GetName() == "CREATE_OBJECT_NO_OFFSET")
+			if (gameServer->GetGameName() == fx::GameName::GTA5 && (native->GetName() == "CREATE_PED" || native->GetName() == "CREATE_OBJECT_NO_OFFSET"))
 			{
 				continue;
 			}
@@ -291,9 +293,13 @@ static InitFunction initFunction([]()
 
 								if (playerEntity)
 								{
-									auto tgt = fx::GetPlayerFocusPos(playerEntity);
+									auto tgts = fx::GetPlayerFocusPos(playerEntity);
 
-									distance = glm::distance2(tgt, pos);
+									// use first position, which is the most focus-related position
+									if (!tgts.empty())
+									{
+										distance = glm::distance2(tgts[0], pos);
+									}
 								}
 							}
 							catch (std::bad_any_cast&)
