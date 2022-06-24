@@ -120,27 +120,38 @@ static InitFunction initFunction([]()
 
 		fpsTracker.Tick();
 
+		std::vector<std::string> metrics;
+		int enabledMetricsCount = 0;
+
+		for (const auto& [var, module] : drawPerfModules)
+		{
+			if (var->GetValue())
+			{
+				auto result = module();
+
+				if (!result.empty())
+				{
+					metrics.emplace_back(std::move(result));
+				}
+
+				enabledMetricsCount++;
+			}
+		}
+
+		// Disable performance overlay when there is nothing to draw
+		if (!enabledMetricsCount)
+		{
+			se::ScopedPrincipal principalScope(se::Principal{ "system.extConsole" });
+			console::GetDefaultContext()->ExecuteSingleCommandDirect(ProgramArguments{ "cl_drawPerf",  "false" });
+			return;
+		}	
+
 		ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->Pos.x, ImGui::GetMainViewport()->Pos.y), 0, ImVec2(0, 0));
 		ImGui::SetNextWindowSize(ImVec2(0, 0));
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 
 		if (ImGui::Begin("DrawPerf", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize))
 		{
-			std::vector<std::string> metrics;
-
-			for (const auto& [var, module] : drawPerfModules)
-			{
-				if (var->GetValue())
-				{
-					auto result = module();
-
-					if (!result.empty())
-					{
-						metrics.emplace_back(std::move(result));
-					}
-				}
-			}
-
 			int i = 0;
 			float spacing = ImGui::GetStyle().ItemSpacing.x;
 
