@@ -122,8 +122,19 @@ void DLLError(DWORD errorCode, std::string_view dllName)
 		win32::FormatMessage(errorCode));
 }
 
+#ifdef LAUNCHER_PERSONALITY_MAIN
+#include "OSChecks.h"
+#endif
+
 int RealMain()
 {
+#ifdef LAUNCHER_PERSONALITY_MAIN
+	if (!EnsureCompatibleOSVersion())
+	{
+		return 100;
+	}
+#endif
+
 	if (auto setSearchPathMode = (decltype(&SetSearchPathMode))GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetSearchPathMode"))
 	{
 		setSearchPathMode(BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE | BASE_SEARCH_PATH_PERMANENT);
@@ -493,10 +504,10 @@ int RealMain()
 		L"\\dsound.dll", // breaks DSound init in game code
 
 		// X360CE v3 is buggy with COM hooks
-		L"\\xinput9_1_0.dll",
-		L"\\xinput1_1.dll",
-		L"\\xinput1_2.dll",
-		L"\\xinput1_3.dll",
+		//L"\\xinput9_1_0.dll",
+		//L"\\xinput1_1.dll",
+		//L"\\xinput1_2.dll",
+		//L"\\xinput1_3.dll",
 		L"\\xinput1_4.dll",
 
 		// packed DLL commonly shipping with RDR mods
