@@ -67,6 +67,39 @@ public:
 	static fwArchetype* GetArchetypeFromHashKeySafe(uint32_t hash, fwModelId& id);
 };
 
+class STREAMING_EXPORT fwExtension
+{
+public:
+	virtual ~fwExtension() = default;
+
+	virtual int GetExtensionId() const = 0;
+
+	virtual int GetCategoryId() const = 0;
+
+	virtual void InitEntityExtensionFromDefinition(const void* extensionDef, fwEntity* entity)
+	{
+	}
+
+	virtual void InitArchetypeExtensionFromDefinition(const void* extensionDef, fwArchetype* entity)
+	{
+	}
+};
+}
+
+class STREAMING_EXPORT fwExtensionList
+{
+public:
+	void Add(rage::fwExtension* extension);
+
+	void* Get(uint32_t id);
+
+private:
+	uintptr_t dummyVal;
+};
+
+namespace rage
+{
+
 class STREAMING_EXPORT fwRefAwareBase
 {
 public:
@@ -102,6 +135,22 @@ public:
 	virtual ~fwEntity() = default;
 
 	virtual bool IsOfType(uint32_t hash) = 0;
+
+	inline void* GetExtension(uint32_t id)
+	{
+		return m_extensionList.Get(id);
+	}
+
+	inline void AddExtension(rage::fwExtension* extension)
+	{
+		return m_extensionList.Add(extension);
+	}
+
+	template<typename T>
+	inline T* GetExtension()
+	{
+		return reinterpret_cast<T*>(GetExtension(typename T::GetClassId()));
+	}
 
 private:
 	template<typename TMember>
@@ -164,11 +213,13 @@ public:
 	}
 
 private:
-	char m_pad[40]; // +8
+	char m_pad[8]; // +8
+	fwExtensionList m_extensionList; //+16
+	char m_pad2[24]; // +24
 	uint8_t m_entityType; // +48
-	char m_pad2[15]; // +49
+	char m_pad3[15]; // +49
 	rage::PreciseTransform m_transform; // +64
-	char m_pad3[96]; // +128
+	char m_pad4[96]; // +128
 	void* m_netObject; // +224
 };
 

@@ -1,6 +1,6 @@
 #include <StdInc.h>
 
-#if __has_include(<EntitySystem.h>) && defined(GTA_FIVE)
+#if __has_include(<EntitySystem.h>) && (defined(GTA_FIVE) || defined(IS_RDR3))
 #include <ResourceManager.h>
 #include <StateBagComponent.h>
 #include <EntitySystem.h>
@@ -25,6 +25,11 @@ public:
 	virtual int GetExtensionId() const override
 	{
 		return GetClassId();
+	}
+
+	virtual int GetCategoryId() const override
+	{
+		return (int)0;// ????
 	}
 
 	static int GetClassId()
