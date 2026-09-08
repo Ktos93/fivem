@@ -399,6 +399,15 @@ void NUIWindow::InitializeRenderBacking()
 	// create the backing texture
 	{
 		std::lock_guard<std::shared_mutex> _(m_textureMutex);
+#ifdef IS_RDR3
+		if (!m_rawBlit)
+		{
+			// DUI keeps one host texture, as in FiveM, and copies CEF images into it.
+			std::vector<uint8_t> pixels(size_t(m_width) * m_height * 4);
+			m_nuiTexture = g_nuiGi->CreateTexture(m_width, m_height, nui::GITextureFormat::ARGB, pixels.data());
+			return;
+		}
+#endif
 		m_nuiTexture = g_nuiGi->CreateTextureBacking(m_width, m_height, nui::GITextureFormat::ARGB);
 	}
 
@@ -638,6 +647,9 @@ void NUIWindow::UpdateFrame()
 	{
 		if (!m_rawBlit)
 		{
+#ifdef IS_RDR3
+			g_nuiGi->BlitTexture(GetTexture(), texture);
+#else
 			if (!m_swapSrv)
 			{
 				struct
@@ -821,6 +833,7 @@ void NUIWindow::UpdateFrame()
 					memset(&m_lastDirtyRect, 0, sizeof(m_lastDirtyRect));
 				}
 			}
+#endif
 		}
 	}
 	else if (m_renderBuffer)

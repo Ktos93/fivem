@@ -44,6 +44,10 @@ private:
 	bool m_flushMouse = true;
 
 public:
+#ifdef IS_RDR3
+	virtual void EnqueueRenderWork(std::function<void()> work) override;
+#endif
+
 	virtual void GetGameResolution(int* width, int* height) override;
 
 	virtual fwRefContainer<GITexture> CreateTexture(int width, int height, GITextureFormat format, void* pixelData) override;
@@ -90,6 +94,8 @@ public:
 	{
 #ifdef GTA_FIVE
 		::GetD3D11DeviceContext()->CopyResource((ID3D11Resource*)dst->GetNativeTexture(), (ID3D11Resource*)src->GetNativeTexture());
+#elif defined(IS_RDR3)
+		rage::sga::CopyTexture(static_cast<rage::sga::Texture*>(src->GetHostTexture()), static_cast<rage::sga::Texture*>(dst->GetHostTexture()));
 #endif
 	}
 
@@ -130,6 +136,13 @@ public:
 
 static tbb::concurrent_queue<std::function<void()>> g_onRenderQueue;
 static tbb::concurrent_queue<std::function<void()>> g_earlyOnRenderQueue;
+
+#ifdef IS_RDR3
+void GtaNuiInterface::EnqueueRenderWork(std::function<void()> work)
+{
+	g_onRenderQueue.push(std::move(work));
+}
+#endif
 
 class GtaNuiTextureBase : public nui::GITexture
 {
@@ -661,7 +674,7 @@ fwRefContainer<GITexture> GtaNuiInterface::CreateTextureFromShareHandle(HANDLE s
 				ImageCreateInfo.arrayLayers = 1;
 				ImageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 				ImageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-				ImageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+				ImageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 				ImageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 				ImageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -844,6 +857,9 @@ static GtaNuiInterface nuiGi;
 
 static void DoRender()
 {
+#ifdef IS_RDR3
+	rage::sysMemAllocator::UpdateAllocatorValue();
+#endif
 	std::function<void()> fn;
 
 	while (g_earlyOnRenderQueue.try_pop(fn))

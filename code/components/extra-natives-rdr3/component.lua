@@ -12,6 +12,7 @@ return function()
 	}
 
 	files {
+		'components/extra-natives-five/src/RuntimeAssetNatives.cpp',
 		'components/extra-natives-five/src/TimecycleNatives.cpp',
 		'components/extra-natives-five/src/VisualSettingsNatives.cpp',
 		'components/extra-natives-five/src/PoolTraversalNatives.cpp',

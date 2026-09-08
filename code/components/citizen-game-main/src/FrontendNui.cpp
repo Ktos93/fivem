@@ -145,6 +145,13 @@ private:
 public:
 	void Initialize(citizen::GameWindow* window);
 
+#ifdef IS_RDR3
+	virtual void EnqueueRenderWork(std::function<void()> work) override
+	{
+		g_onRenderQueue.push(std::move(work));
+	}
+#endif
+
 	virtual void GetGameResolution(int* width, int* height) override
 	{
 		int w, h;

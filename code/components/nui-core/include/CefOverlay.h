@@ -201,6 +201,10 @@ namespace nui
 			return false;
 		}
 
+#ifdef IS_RDR3
+		virtual void EnqueueRenderWork(std::function<void()> work) = 0;
+#endif
+
 		fwEvent<HWND, UINT, WPARAM, LPARAM, bool&, LRESULT&> OnWndProc;
 
 		fwEvent<std::vector<InputTarget*>&> QueryInputTarget;
@@ -217,6 +221,11 @@ namespace nui
 	};
 
 	void OVERLAY_DECL Initialize(nui::GameInterface* gi);
+
+#ifdef IS_RDR3
+	// Schedule work on the existing NUI render queue, including from other threads.
+	void OVERLAY_DECL EnqueueRenderWork(std::function<void()> work);
+#endif
 #endif
 
 	enum class CefChannelLayout

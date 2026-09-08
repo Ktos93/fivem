@@ -3,14 +3,21 @@
 #include <Hooking.h>
 
 #include <Streaming.h>
+#ifdef GTA_FIVE
 #include <EntitySystem.h>
+#endif
 
 #include <scrBind.h>
 
 #include <CrossBuildRuntime.h>
 
+#ifdef GTA_FIVE
 #define RAGE_FORMATS_GAME five
 #define RAGE_FORMATS_GAME_FIVE
+#elif defined(IS_RDR3)
+#define RAGE_FORMATS_GAME rdr3
+#define RAGE_FORMATS_GAME_RDR3
+#endif
 
 #define RAGE_FORMATS_IN_GAME
 #include <gtaDrawable.h>
@@ -22,7 +29,9 @@
 
 #include <grcTexture.h>
 
+#ifdef GTA_FIVE
 #include <RageParser.h>
+#endif
 
 #include <wrl.h>
 #include <wincodec.h>
@@ -35,6 +44,7 @@
 #define WANT_CEF_INTERNALS
 #include <CefOverlay.h>
 
+#ifdef GTA_FIVE
 #include <NetLibrary.h>
 
 #include <ResourceCacheDevice.h>
@@ -46,22 +56,32 @@
 #include <skyr/url.hpp>
 
 #include <concurrent_unordered_set.h>
+#endif
 
 #include "FormData.h"
 
 using Microsoft::WRL::ComPtr;
 
-static hook::cdecl_stub<rage::five::pgDictionary<rage::grcTexture>*(void*, int)> textureDictionaryCtor([]()
+using RuntimeDictionary = rage::RAGE_FORMATS_GAME::pgDictionary<rage::grcTexture>;
+
+static hook::cdecl_stub<RuntimeDictionary*(void*, int)> textureDictionaryCtor([]()
 {
+#ifdef GTA_FIVE
 	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 48 8B F8 EB 02 33 FF 4C 8D 3D"));
+#elif defined(IS_RDR3)
+	// PedShotManager::InitOutputTxd -> pgDictionary capacity ctor (0x1404F834C).
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 48 8B F0 EB ? 48 8B F5 48 89 B7"));
+#endif
 });
 
-class RuntimeTex
+class RuntimeTex : public std::enable_shared_from_this<RuntimeTex>
 {
+	friend class RuntimeTxd;
 public:
 	RuntimeTex(const char* name, int width, int height);
-
+#ifdef GTA_FIVE
 	RuntimeTex(rage::grcTexture* texture, const void* data, size_t size);
+#endif
 
 	RuntimeTex(rage::grcTexture* texture, bool owned = true);
 
@@ -98,6 +118,10 @@ private:
 
 	fwRefContainer<fwRefCountable> m_reference;
 
+#ifdef IS_RDR3
+	int m_width = 0;
+	int m_height = 0;
+#endif
 	int m_pitch = 0;
 
 	std::vector<uint8_t> m_backingPixels;
@@ -105,10 +129,13 @@ private:
 	bool m_owned = false;
 };
 
-class RuntimeTxd
+class RuntimeTxd : public std::enable_shared_from_this<RuntimeTxd>
 {
 public:
 	RuntimeTxd(const char* name);
+#ifdef IS_RDR3
+	~RuntimeTxd();
+#endif
 
 	std::shared_ptr<RuntimeTex> CreateTexture(const char* name, int width, int height);
 
@@ -118,6 +145,13 @@ public:
 
 private:
 	void EnsureTxd();
+#ifdef IS_RDR3
+	void ReleaseTxd();
+	void BindResourceStop();
+	std::mutex m_textureMutex;
+	bool m_stopBound = false;
+#endif
+	void AddTexture(const char* name, const std::shared_ptr<RuntimeTex>& texture);
 
 private:
 	uint32_t m_txdIndex = -1;
@@ -125,9 +159,10 @@ private:
 
 	std::unordered_map<std::string, std::shared_ptr<RuntimeTex>> m_textures;
 
-	rage::five::pgDictionary<rage::grcTexture>* m_txd = nullptr;
+	RuntimeDictionary* m_txd = nullptr;
 };
 
+#ifdef GTA_FIVE
 RuntimeTex::RuntimeTex(const char* name, int width, int height)
 	: m_owned(true)
 {
@@ -160,6 +195,26 @@ RuntimeTex::RuntimeTex(rage::grcTexture* texture, const void* data, size_t size)
 	memcpy(&m_backingPixels[0], data, m_backingPixels.size());
 }
 
+#else
+RuntimeTex::RuntimeTex(const char* name, int width, int height)
+	: m_width(width), m_height(height), m_pitch(width * 4), m_owned(true)
+{
+	m_backingPixels.resize((size_t)m_pitch * height);
+}
+
+static rage::grcTexture* CreateTextureImage(int width, int height, int pitch, const std::vector<uint8_t>& pixels)
+{
+	rage::grcTextureReference reference{};
+	reference.width = width;
+	reference.height = height;
+	reference.depth = 1;
+	reference.stride = pitch;
+	reference.format = 11; // grcImage BGRA8, as used by NUI.
+	reference.pixelData = const_cast<uint8_t*>(pixels.data());
+	return rage::grcTextureFactory::getInstance()->createImage(&reference, nullptr);
+}
+#endif
+
 RuntimeTex::RuntimeTex(rage::grcTexture* texture, bool owned)
 	: m_texture(texture), m_owned(owned)
 {
@@ -170,19 +225,104 @@ RuntimeTex::~RuntimeTex()
 {
 	if (m_owned)
 	{
+#ifdef IS_RDR3
+		nui::EnqueueRenderWork([texture = m_texture]() { delete texture; });
+#else
 		delete m_texture;
+#endif
 		m_texture = nullptr;
 	}
 }
 
+#ifdef IS_RDR3
+// The 24-byte helper used by PedShotManager at 0x14055BB58. An empty list
+// disables its collection of previously retired slots; the store is at +0x10.
+struct RuntimeTxdRegistrar
+{
+	void* slots = nullptr;
+	uint16_t count = 0;
+	uint16_t capacity = 0;
+	uint32_t padding = 0;
+	void* store = nullptr;
+};
+static_assert(sizeof(RuntimeTxdRegistrar) == 24);
+static_assert(sizeof(RuntimeDictionary) == 64);
+
+static void* GetRuntimeTxdStore()
+{
+	static auto store = hook::get_address<void*>(hook::get_pattern("48 8D 0D ? ? ? ? 48 89 28"), 3, 7);
+	return store;
+}
+
+static hook::cdecl_stub<uint32_t*(RuntimeTxdRegistrar*, uint32_t*, uint32_t, RuntimeDictionary*)> registerRuntimeTxd([]()
+{
+	// 0x1405039CC: allocate slot (+0x170), install live dictionary (+0x160),
+	// SetDoNotDefrag and acquire a store reference. SetResource builds RSCs instead.
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 8B 08 89 8F ? ? ? ? 83 F9"));
+});
+
+template<typename Result, typename... Args>
+static Result CallTxdStore(size_t offset, Args... args)
+{
+	void* store = GetRuntimeTxdStore();
+	return reinterpret_cast<Result(*)(void*, Args...)>((*reinterpret_cast<void***>(store))[offset / sizeof(void*)])(store, args...);
+}
+
+RuntimeTxd::~RuntimeTxd()
+{
+	ReleaseTxd();
+}
+
+void RuntimeTxd::ReleaseTxd()
+{
+	std::lock_guard lock(m_textureMutex);
+	if (!m_txd)
+	{
+		return;
+	}
+	// Release on the NUI render queue, after preceding texture operations.
+	nui::EnqueueRenderWork([dictionary = m_txd, index = m_txdIndex, textures = std::move(m_textures)]()
+	{
+		for (uint16_t i = 0; i < dictionary->GetCount(); i++)
+		{
+			dictionary->SetAt(i, nullptr); // RuntimeTex/GITexture owns the images.
+		}
+		CallTxdStore<void>(0xB0, index);
+		if (CallTxdStore<int>(0xC0, index) == 0)
+		{
+			CallTxdStore<void>(0x40, index);
+		}
+		for (auto& [name, texture] : textures)
+		{
+			if (texture->m_owned)
+			{
+				delete texture->m_texture;
+			}
+			texture->m_texture = nullptr;
+			texture->m_reference = nullptr;
+		}
+	});
+	m_txd = nullptr;
+	m_txdIndex = -1;
+}
+#endif
+
 int RuntimeTex::GetWidth()
 {
+#ifdef GTA_FIVE
 	return m_texture ? m_texture->GetWidth() : 0;
+#else
+	return m_owned ? m_width : (m_texture ? m_texture->GetWidth() : 0);
+#endif
 }
 
 int RuntimeTex::GetHeight()
 {
+#ifdef GTA_FIVE
 	return m_texture ? m_texture->GetHeight() : 0;
+#else
+	return m_owned ? m_height : (m_texture ? m_texture->GetHeight() : 0);
+#endif
 }
 
 int RuntimeTex::GetPitch()
@@ -200,6 +340,12 @@ void RuntimeTex::SetTexture(rage::grcTexture* texture)
 
 void RuntimeTex::SetPixel(int x, int y, int r, int g, int b, int a)
 {
+#ifdef IS_RDR3
+	if (m_backingPixels.empty() || x < 0 || y < 0 || x >= GetWidth() || y >= GetHeight())
+	{
+		return;
+	}
+#endif
 	auto offset = (y * m_pitch) + (x * 4);
 
 	if (offset < 0 || offset > m_backingPixels.size() - 4)
@@ -222,6 +368,7 @@ bool RuntimeTex::SetPixelData(const void* data, size_t length)
 		return false;
 	}
 
+#ifdef GTA_FIVE
 	if (!m_texture)
 	{
 		return false;
@@ -235,12 +382,22 @@ bool RuntimeTex::SetPixelData(const void* data, size_t length)
 		memcpy(m_backingPixels.data(), data, length);
 		m_texture->Unmap(&lockedTexture);
 	}
+#else
+	if (!data || m_backingPixels.empty())
+	{
+		return false;
+	}
+	memcpy(m_backingPixels.data(), data, length);
+
+	Commit();
+#endif
 
 	return true;
 }
 
 void RuntimeTex::Commit()
 {
+#ifdef GTA_FIVE
 	rage::grcLockedTexture lockedTexture;
 
 	if (m_texture && m_texture->Map(0, 0, &lockedTexture, rage::grcLockFlags::WriteDiscard))
@@ -248,6 +405,25 @@ void RuntimeTex::Commit()
 		memcpy(lockedTexture.pBits, m_backingPixels.data(), m_backingPixels.size());
 		m_texture->Unmap(&lockedTexture);
 	}
+#elif defined(IS_RDR3)
+	if (m_backingPixels.empty())
+	{
+		return;
+	}
+	// Capture the committed image; scripts may edit the next frame's pixels immediately.
+	nui::EnqueueRenderWork([self = shared_from_this(), pixels = m_backingPixels]()
+	{
+		if (self->m_texture)
+		{
+			auto staging = CreateTextureImage(self->m_width, self->m_height, self->m_pitch, pixels);
+			if (staging)
+			{
+				rage::sga::CopyTexture(staging, self->m_texture);
+				delete staging;
+			}
+		}
+	});
+#endif
 }
 
 RuntimeTxd::RuntimeTxd(const char* name)
@@ -258,6 +434,7 @@ RuntimeTxd::RuntimeTxd(const char* name)
 
 void RuntimeTxd::EnsureTxd()
 {
+#ifdef GTA_FIVE
 	streaming::Manager* streaming = streaming::Manager::GetInstance();
 	auto txdStore = streaming->moduleMgr.GetStreamingModule("ytd");
 
@@ -269,7 +446,7 @@ void RuntimeTxd::EnsureTxd()
 
 		if (!entry.handle)
 		{
-			void* memoryStub = rage::GetAllocator()->Allocate(sizeof(rage::five::pgDictionary<rage::grcTexture>), 16, 0);
+			void* memoryStub = rage::GetAllocator()->Allocate(sizeof(RuntimeDictionary), 16, 0);
 			m_txd = textureDictionaryCtor(memoryStub, 1);
 
 			streaming::strAssetReference ref;
@@ -282,6 +459,65 @@ void RuntimeTxd::EnsureTxd()
 			txdStore->AddRef(m_txdIndex);
 		}
 	}
+#elif defined(IS_RDR3)
+	void* memory = rage::GetAllocator()->Allocate(sizeof(RuntimeDictionary), 16, 0);
+	m_txd = textureDictionaryCtor(memory, 1);
+	RuntimeTxdRegistrar registrar;
+	registrar.store = GetRuntimeTxdStore();
+	registerRuntimeTxd(&registrar, &m_txdIndex, HashString(m_name), m_txd);
+	if (m_txdIndex == uint32_t(-1))
+	{
+		// RDR3's formats datBase is a disk layout, not a C++ virtual base.
+		reinterpret_cast<void(*)(void*, int)>((*reinterpret_cast<void***>(m_txd))[0])(m_txd, 1);
+		m_txd = nullptr;
+	}
+#endif
+}
+
+#ifdef IS_RDR3
+void RuntimeTxd::BindResourceStop()
+{
+	if (!m_stopBound)
+	{
+		fx::OMPtr<IScriptRuntime> runtime;
+		if (FX_SUCCEEDED(fx::GetCurrentScriptRuntime(&runtime)))
+		{
+			auto resource = reinterpret_cast<fx::Resource*>(runtime->GetParentObject());
+			resource->OnStop.Connect([weakTxd = weak_from_this()]()
+			{
+				if (auto txd = weakTxd.lock())
+				{
+					txd->ReleaseTxd();
+				}
+			});
+			m_stopBound = true;
+		}
+	}
+}
+#endif
+
+void RuntimeTxd::AddTexture(const char* name, const std::shared_ptr<RuntimeTex>& texture)
+{
+#ifdef GTA_FIVE
+	m_txd->Add(name, texture->GetTexture());
+#elif defined(IS_RDR3)
+	BindResourceStop();
+	nui::EnqueueRenderWork([txd = weak_from_this(), texture, name = std::string(name), pixels = texture->m_backingPixels]()
+	{
+		if (auto locked = txd.lock())
+		{
+			std::lock_guard lock(locked->m_textureMutex);
+			if (locked->m_txd)
+			{
+				texture->m_texture = CreateTextureImage(texture->m_width, texture->m_height, texture->m_pitch, pixels);
+				if (texture->GetTexture())
+				{
+					locked->m_txd->Add(name.c_str(), texture->GetTexture());
+				}
+			}
+		}
+	});
+#endif
 }
 
 std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTexture(const char* name, int width, int height)
@@ -307,7 +543,7 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTexture(const char* name, int widt
 	}
 
 	auto tex = std::make_shared<RuntimeTex>(name, width, height);
-	m_txd->Add(name, tex->GetTexture());
+	AddTexture(name, tex);
 
 	m_textures[name] = tex;
 
@@ -339,19 +575,41 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromDui(const char* name, c
 	}
 
 	auto texture = nui::GetWindowTexture(duiHandle);
+	if (!texture.GetRef())
+	{
+		return nullptr;
+	}
 	auto tex = std::make_shared<RuntimeTex>(nullptr, false);
 	tex->SetReferenceData(texture);
 
-	texture->WithHostTexture([this, name = std::string{ name }, tex](void* hostTexture)
+#ifdef IS_RDR3
+	BindResourceStop();
+#endif
+
+	texture->WithHostTexture([weakTxd = weak_from_this(), name = std::string{ name }, tex](void* hostTexture)
 	{
+		auto txd = weakTxd.lock();
+		if (!txd)
+		{
+			return;
+		}
+#ifdef IS_RDR3
+		std::lock_guard lock(txd->m_textureMutex);
+#endif
+		if (!txd->m_txd || !hostTexture)
+		{
+			return;
+		}
 		auto texture = (rage::grcTexture*)hostTexture;
 		tex->SetTexture(texture);
-		m_txd->Add(HashString(name), tex->GetTexture());
+		txd->m_txd->Add(HashString(name), tex->GetTexture());
 
-		OnNextMainFrame([this, name = std::move(name)]()
+#ifdef GTA_FIVE
+		OnNextMainFrame([txdName = txd->m_name, name = std::move(name)]()
 		{
-			TextureReplacement_OnTextureCreate(m_name, name);
+			TextureReplacement_OnTextureCreate(txdName, name);
 		});
+#endif
 	});
 
 	m_textures[name] = tex;
@@ -360,6 +618,7 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromDui(const char* name, c
 }
 
 #pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 static ComPtr<IWICImagingFactory> g_imagingFactory;
 
@@ -448,6 +707,13 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromImage(const char* name,
 		return nullptr;
 	}
 
+#ifdef IS_RDR3
+	if (m_textures.find(name) != m_textures.end())
+	{
+		return nullptr;
+	}
+#endif
+
 	if (auto source = ImageToBitmapSource(fileName))
 	{
 		ComPtr<IWICBitmapSource> convertedSource;
@@ -463,6 +729,12 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromImage(const char* name,
 			source = convertedSource;
 		}
 
+#ifdef IS_RDR3
+		if (width == 0 || height == 0 || width > 8192 || height > 8192)
+		{
+			return nullptr;
+		}
+#endif
 		// create a pixel data buffer
 		std::unique_ptr<uint32_t[]> pixelData(new uint32_t[width * height]);
 
@@ -470,6 +742,7 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromImage(const char* name,
 
 		if (SUCCEEDED(hr))
 		{
+#ifdef GTA_FIVE
 			rage::grcTextureReference reference;
 			memset(&reference, 0, sizeof(reference));
 			reference.width = width;
@@ -480,8 +753,11 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromImage(const char* name,
 			reference.pixelData = (uint8_t*)pixelData.get();
 
 			auto tex = std::make_shared<RuntimeTex>(rage::grcTextureFactory::getInstance()->createImage(&reference, nullptr), pixelData.get(), width * height * 4);
-			m_txd->Add(name, tex->GetTexture());
-
+#elif defined(IS_RDR3)
+			auto tex = std::make_shared<RuntimeTex>(name, width, height);
+			memcpy(tex->m_backingPixels.data(), pixelData.get(), width * height * 4);
+#endif
+			AddTexture(name, tex);
 			m_textures[name] = tex;
 
 			return tex;
@@ -493,12 +769,16 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromImage(const char* name,
 
 bool RuntimeTex::LoadImage(const char* fileName)
 {
+#ifdef GTA_FIVE
 	if (!m_texture)
+#else
+	if (m_backingPixels.empty())
+#endif
 	{
 		return false;
 	}
 
-	auto completion = [this](const ComPtr<IWICBitmapSource>& bitmapSource)
+	auto completion = [self = shared_from_this(), this](const ComPtr<IWICBitmapSource>& bitmapSource)
 	{
 		auto source = bitmapSource;
 		ComPtr<IWICBitmapSource> convertedSource;
@@ -535,7 +815,7 @@ bool RuntimeTex::LoadImage(const char* fileName)
 		UINT width = 0, height = 0;
 		source->GetSize(&width, &height);
 
-		if (width == m_texture->GetWidth() && height == m_texture->GetHeight())
+		if (width == GetWidth() && height == GetHeight())
 		{
 			return completion(source);
 		}
@@ -587,7 +867,7 @@ bool RuntimeTex::LoadImage(const char* fileName)
 				}
 			};
 
-			auto workItem = new Item(std::move(source), m_texture->GetWidth(), m_texture->GetHeight(), std::move(completion));
+			auto workItem = new Item(std::move(source), GetWidth(), GetHeight(), std::move(completion));
 			QueueUserWorkItem(&Item::StaticWork, workItem, 0);
 
 			return true;
@@ -597,6 +877,7 @@ bool RuntimeTex::LoadImage(const char* fileName)
 	return false;
 }
 
+#ifdef GTA_FIVE
 #define VFS_GET_RAGE_PAGE_FLAGS 0x20001
 
 struct GetRagePageFlagsExtension
@@ -1071,6 +1352,8 @@ static hook::cdecl_stub<void*(fwEntityDef*, int fileIdx, fwArchetype* archetype,
 	return hook::get_call(hook::pattern("4C 8D 4C 24 40 4D 8B C6 41 8B D7 48 8B CF").count(1).get(0).get<void>(14));
 });
 
+#endif
+
 static InitFunction initFunction([]()
 {
 	OnMainGameFrame.Connect([]
@@ -1109,6 +1392,7 @@ static InitFunction initFunction([]()
 		.AddMethod("SET_RUNTIME_TEXTURE_IMAGE", &RuntimeTex::LoadImage)
 		.AddMethod("COMMIT_RUNTIME_TEXTURE", &RuntimeTex::Commit);
 
+#ifdef GTA_FIVE
 	fx::ScriptEngine::RegisterNativeHandler("REGISTER_ARCHETYPES", [](fx::ScriptContext& context)
 	{
 		fx::OMPtr<IScriptRuntime> runtime;
@@ -1369,4 +1653,5 @@ static InitFunction initFunction([]()
 			}
 		});
 	});
+#endif
 });

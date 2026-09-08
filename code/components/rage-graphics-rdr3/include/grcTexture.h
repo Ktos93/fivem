@@ -22,6 +22,10 @@ namespace rage
 		public:
 			virtual ~Texture() = default;
 
+			// ImageParams at +0x18 (validated by RDR2's texture-copy checks).
+			inline int GetWidth() const { return *reinterpret_cast<const uint16_t*>(reinterpret_cast<const char*>(this) + 0x18); }
+			inline int GetHeight() const { return *reinterpret_cast<const uint16_t*>(reinterpret_cast<const char*>(this) + 0x1A); }
+
 			inline static bool IsRenderSystemColorSwapped()
 			{
 				return true;
@@ -215,6 +219,8 @@ namespace rage
 		void GFX_EXPORT Driver_Create_ShaderResourceView(Texture* texture, const TextureViewDesc& desc);
 
 		void GFX_EXPORT Driver_Destroy_Texture(Texture* texture);
+
+		bool GFX_EXPORT CopyTexture(Texture* source, Texture* destination);
 	}
 
 	// rage::grcImage, in reality

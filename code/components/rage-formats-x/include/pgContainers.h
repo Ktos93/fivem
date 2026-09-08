@@ -426,6 +426,11 @@ public:
 		return m_values.Get(index);
 	}
 
+	inline void SetAt(uint16_t index, TValue* value)
+	{
+		m_values.Set(index, value);
+	}
+
 	inline uint16_t GetCount() const
 	{
 		return m_hashes.GetCount();

@@ -1462,6 +1462,13 @@ void SwitchContext(const std::string& contextId)
 	}
 }
 
+#ifdef IS_RDR3
+void EnqueueRenderWork(std::function<void()> work)
+{
+	g_nuiGi->EnqueueRenderWork(std::move(work));
+}
+#endif
+
 void Initialize(nui::GameInterface* gi)
 {
 	g_nuiGi = gi;

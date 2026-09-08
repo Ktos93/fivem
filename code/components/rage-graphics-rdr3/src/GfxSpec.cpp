@@ -570,6 +570,18 @@ void* GetGraphicsDriverHandle()
 
 namespace rage::sga
 {
+	static hook::cdecl_stub<bool(Texture*, Texture*, int, int, int, int)> copyTexture([]()
+	{
+		// 0x140521CA0 validates the images and dispatches CopyResource for the active API.
+		return hook::get_pattern("48 8B F1 4C 8D 71 18 8B 4D 60 4C 8D 62 18 48 8B FA 41 83 F8 FF", -0x1D);
+	});
+
+	GFX_EXPORT bool CopyTexture(Texture* source, Texture* destination)
+	{
+		// Engine order is destination, source (D3D12 transitions to COPY_DEST/COPY_SOURCE).
+		return source && destination && copyTexture(destination, source, -1, -1, -1, -1);
+	}
+
 	void Driver_Create_ShaderResourceView(rage::sga::Texture* texture, const rage::sga::TextureViewDesc& desc)
 	{
 		(*(void(__fastcall**)(__int64, void*, void*, const void*))(**(uint64_t**)sgaDriver + 256i64))(*(uint64_t*)sgaDriver, *(char**)((char*)texture + 48), texture, &desc);
