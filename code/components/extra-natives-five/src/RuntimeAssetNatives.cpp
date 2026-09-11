@@ -195,7 +195,7 @@ RuntimeTex::RuntimeTex(rage::grcTexture* texture, const void* data, size_t size)
 	memcpy(&m_backingPixels[0], data, m_backingPixels.size());
 }
 
-#else
+#elif defined(IS_RDR3)
 RuntimeTex::RuntimeTex(const char* name, int width, int height)
 	: m_width(width), m_height(height), m_pitch(width * 4), m_owned(true)
 {
@@ -227,7 +227,7 @@ RuntimeTex::~RuntimeTex()
 	{
 #ifdef IS_RDR3
 		nui::EnqueueRenderWork([texture = m_texture]() { delete texture; });
-#else
+#elif defined(GTA_FIVE)
 		delete m_texture;
 #endif
 		m_texture = nullptr;
@@ -250,6 +250,7 @@ static_assert(sizeof(RuntimeDictionary) == 64);
 
 static void* GetRuntimeTxdStore()
 {
+	// rage::g_TxdStore, the store the game's own texture dictionaries live in.
 	static auto store = hook::get_address<void*>(hook::get_pattern("48 8D 0D ? ? ? ? 48 89 28"), 3, 7);
 	return store;
 }
@@ -260,13 +261,6 @@ static hook::cdecl_stub<uint32_t*(RuntimeTxdRegistrar*, uint32_t*, uint32_t, Run
 	// SetDoNotDefrag and acquire a store reference. SetResource builds RSCs instead.
 	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 8B 08 89 8F ? ? ? ? 83 F9"));
 });
-
-template<typename Result, typename... Args>
-static Result CallTxdStore(size_t offset, Args... args)
-{
-	void* store = GetRuntimeTxdStore();
-	return reinterpret_cast<Result(*)(void*, Args...)>((*reinterpret_cast<void***>(store))[offset / sizeof(void*)])(store, args...);
-}
 
 RuntimeTxd::~RuntimeTxd()
 {
@@ -287,16 +281,21 @@ void RuntimeTxd::ReleaseTxd()
 		{
 			dictionary->SetAt(i, nullptr); // RuntimeTex/GITexture owns the images.
 		}
-		CallTxdStore<void>(0xB0, index);
-		if (CallTxdStore<int>(0xC0, index) == 0)
+
+		// The same store teardown the game's own release path does (0x1405039CC).
+		auto store = reinterpret_cast<hook::FlexStruct*>(GetRuntimeTxdStore());
+		store->CallVirtual<void>(0xB0, index); // drop the store's reference
+		if (store->CallVirtual<int>(0xC0, index) == 0) // no references left
 		{
-			CallTxdStore<void>(0x40, index);
+			store->CallVirtual<void>(0x40, index); // remove the slot
 		}
+
 		for (auto& [name, texture] : textures)
 		{
 			if (texture->m_owned)
 			{
 				delete texture->m_texture;
+				texture->m_owned = false;
 			}
 			texture->m_texture = nullptr;
 			texture->m_reference = nullptr;
@@ -311,7 +310,7 @@ int RuntimeTex::GetWidth()
 {
 #ifdef GTA_FIVE
 	return m_texture ? m_texture->GetWidth() : 0;
-#else
+#elif defined(IS_RDR3)
 	return m_owned ? m_width : (m_texture ? m_texture->GetWidth() : 0);
 #endif
 }
@@ -320,7 +319,7 @@ int RuntimeTex::GetHeight()
 {
 #ifdef GTA_FIVE
 	return m_texture ? m_texture->GetHeight() : 0;
-#else
+#elif defined(IS_RDR3)
 	return m_owned ? m_height : (m_texture ? m_texture->GetHeight() : 0);
 #endif
 }
@@ -340,12 +339,11 @@ void RuntimeTex::SetTexture(rage::grcTexture* texture)
 
 void RuntimeTex::SetPixel(int x, int y, int r, int g, int b, int a)
 {
-#ifdef IS_RDR3
 	if (m_backingPixels.empty() || x < 0 || y < 0 || x >= GetWidth() || y >= GetHeight())
 	{
 		return;
 	}
-#endif
+
 	auto offset = (y * m_pitch) + (x * 4);
 
 	if (offset < 0 || offset > m_backingPixels.size() - 4)
@@ -382,7 +380,7 @@ bool RuntimeTex::SetPixelData(const void* data, size_t length)
 		memcpy(m_backingPixels.data(), data, length);
 		m_texture->Unmap(&lockedTexture);
 	}
-#else
+#elif defined(IS_RDR3)
 	if (!data || m_backingPixels.empty())
 	{
 		return false;
@@ -430,6 +428,10 @@ RuntimeTxd::RuntimeTxd(const char* name)
 	: m_name(name)
 {
 	EnsureTxd();
+
+#ifdef IS_RDR3
+	BindResourceStop();
+#endif
 }
 
 void RuntimeTxd::EnsureTxd()
@@ -501,7 +503,6 @@ void RuntimeTxd::AddTexture(const char* name, const std::shared_ptr<RuntimeTex>&
 #ifdef GTA_FIVE
 	m_txd->Add(name, texture->GetTexture());
 #elif defined(IS_RDR3)
-	BindResourceStop();
 	nui::EnqueueRenderWork([txd = weak_from_this(), texture, name = std::string(name), pixels = texture->m_backingPixels]()
 	{
 		if (auto locked = txd.lock())
@@ -581,10 +582,6 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromDui(const char* name, c
 	}
 	auto tex = std::make_shared<RuntimeTex>(nullptr, false);
 	tex->SetReferenceData(texture);
-
-#ifdef IS_RDR3
-	BindResourceStop();
-#endif
 
 	texture->WithHostTexture([weakTxd = weak_from_this(), name = std::string{ name }, tex](void* hostTexture)
 	{
@@ -707,12 +704,10 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromImage(const char* name,
 		return nullptr;
 	}
 
-#ifdef IS_RDR3
 	if (m_textures.find(name) != m_textures.end())
 	{
 		return nullptr;
 	}
-#endif
 
 	if (auto source = ImageToBitmapSource(fileName))
 	{
@@ -729,12 +724,11 @@ std::shared_ptr<RuntimeTex> RuntimeTxd::CreateTextureFromImage(const char* name,
 			source = convertedSource;
 		}
 
-#ifdef IS_RDR3
 		if (width == 0 || height == 0 || width > 8192 || height > 8192)
 		{
 			return nullptr;
 		}
-#endif
+
 		// create a pixel data buffer
 		std::unique_ptr<uint32_t[]> pixelData(new uint32_t[width * height]);
 
@@ -771,7 +765,7 @@ bool RuntimeTex::LoadImage(const char* fileName)
 {
 #ifdef GTA_FIVE
 	if (!m_texture)
-#else
+#elif defined(IS_RDR3)
 	if (m_backingPixels.empty())
 #endif
 	{
