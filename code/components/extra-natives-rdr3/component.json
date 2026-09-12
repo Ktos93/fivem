@@ -14,7 +14,8 @@
 		"nui:core",
 		"citizen:resources:client",
 		"net",
-		"voip:mumble"
+		"voip:mumble",
+		"vendor:im3d"
 	],
 	"provides": []
 }
