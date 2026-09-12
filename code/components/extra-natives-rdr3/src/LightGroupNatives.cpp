@@ -23,16 +23,26 @@
 // no entity destructor hook are needed.
 //
 // Runtime CLightComponent (0x180 bytes, allocated in sub_140DDE8FC); only the
-// two overridden fields are named, the packed color keeps its alpha byte.
+// two overridden fields are named. The color is split into its channels: the engine
+// keeps the alpha byte there and overrides must not touch it.
+struct LightColor
+{
+	uint8_t red;
+	uint8_t green;
+	uint8_t blue;
+	uint8_t alpha;
+};
+
 struct alignas(16) LightAttributes
 {
 	char pad[0x58];
-	float intensity; // +0x58
-	uint32_t color;  // +0x5C
+	float intensity;  // +0x58
+	LightColor color; // +0x5C
 	char pad2[0x180 - 0x60];
 };
 
 static_assert(sizeof(LightAttributes) == 0x180);
+static_assert(sizeof(LightColor) == 4);
 static_assert(offsetof(LightAttributes, intensity) == 0x58);
 static_assert(offsetof(LightAttributes, color) == 0x5C);
 
@@ -70,9 +80,11 @@ public:
 		hasIntensity = true;
 	}
 
-	void SetColor(uint32_t value)
+	void SetColor(uint8_t red, uint8_t green, uint8_t blue)
 	{
-		color = value;
+		color.red = red;
+		color.green = green;
+		color.blue = blue;
 		hasColor = true;
 	}
 
@@ -93,7 +105,7 @@ public:
 	bool hasIntensity = false;
 	float intensity = 0.0f;
 	bool hasColor = false;
-	uint32_t color = 0;
+	LightColor color{};
 };
 
 static LightGroup* GetLightGroup(fwEntity* entity)
@@ -103,7 +115,7 @@ static LightGroup* GetLightGroup(fwEntity* entity)
 
 // Applies the override onto a pair of light values, shared by the draw path (which
 // copies the whole component) and the getters (which need only these two fields).
-static void ApplyOverride(float& intensity, uint32_t& color, const CLightOverride& settings)
+static void ApplyOverride(float& intensity, LightColor& color, const CLightOverride& settings)
 {
 	if (settings.hasIntensity)
 	{
@@ -111,7 +123,10 @@ static void ApplyOverride(float& intensity, uint32_t& color, const CLightOverrid
 	}
 	if (settings.hasColor)
 	{
-		color = (color & 0xFF000000) | settings.color;
+		// only the channels an override owns, the engine's alpha byte stays as it was
+		color.red = settings.color.red;
+		color.green = settings.color.green;
+		color.blue = settings.color.blue;
 	}
 }
 
@@ -177,7 +192,7 @@ static CLightOverride* GetOverride(fwEntity* entity)
 struct LightValues
 {
 	float intensity = 0.0f;
-	uint32_t color = 0;
+	LightColor color{};
 };
 
 // Values one light of the entity draws with: the model's own values with the override
@@ -247,13 +262,13 @@ static HookFunction hookFunction([]()
 		int handle = context.GetArgument<int>(0);
 		auto entity = rage::fwScriptGuid::GetBaseFromGuid(handle);
 		auto group = GetLightGroup(entity);
-		int red = context.GetArgument<int>(1);
-		int green = context.GetArgument<int>(2);
-		int blue = context.GetArgument<int>(3);
+		auto red = context.GetArgument<uint8_t>(1);
+		auto green = context.GetArgument<uint8_t>(2);
+		auto blue = context.GetArgument<uint8_t>(3);
 
 		if (group && red >= 0 && red <= 255 && green >= 0 && green <= 255 && blue >= 0 && blue <= 255)
 		{
-			GetOverride(entity)->SetColor(red | (green << 8) | (blue << 16));
+			GetOverride(entity)->SetColor(red, green, blue);
 		}
 
 		int count = group ? group->count : 0;
@@ -279,15 +294,15 @@ static HookFunction hookFunction([]()
 		// Red, green and blue output pointers; null is allowed.
 		if (auto red = context.GetArgument<int*>(2))
 		{
-			*red = color & 0xFF;
+			*red = color.red;
 		}
 		if (auto green = context.GetArgument<int*>(3))
 		{
-			*green = (color >> 8) & 0xFF;
+			*green = color.green;
 		}
 		if (auto blue = context.GetArgument<int*>(4))
 		{
-			*blue = (color >> 16) & 0xFF;
+			*blue = color.blue;
 		}
 	});
 
