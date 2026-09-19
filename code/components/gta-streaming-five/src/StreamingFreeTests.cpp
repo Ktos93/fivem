@@ -15,10 +15,18 @@
 #include <Error.h>
 #include <MinHook.h>
 #include <jitasm.h>
-
 #include <GameInit.h>
 #include <CoreConsole.h>
 #include <CL2LaunchMode.h>
+
+#ifdef IS_RDR3
+namespace streaming
+{
+	// ambient mask volume zone files a resource streams under an "amv_zone_" name, implemented in
+	// gta-core-rdr3/PatchAMV.cpp
+	void AddAmvZoneFileIndex(const std::string& name, uint32_t strIndex);
+}
+#endif
 
 #ifdef GTA_FIVE
 #include <atPool.h>
@@ -175,6 +183,11 @@ uint32_t* AddStreamingFileWrap(uint32_t* indexRet)
 		auto store = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule(*indexRet);
 		auto baseIdx = store->baseIdx;
 		auto baseFn = g_lastStreamingName.substr(0, g_lastStreamingName.find_last_of('.'));
+
+#ifdef IS_RDR3
+		// ambient mask volume zone files a resource streams under an "amv_zone_" name
+		streaming::AddAmvZoneFileIndex(g_lastStreamingName, *indexRet);
+#endif
 
 		{
 			std::unique_lock _(g_streamingMapMutex);
